@@ -1,0 +1,31 @@
+# Secrets & Environment
+.env
+*.env.local
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python Cache & Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Project Generated Storage & Outputs
+storage/
+output/
+*.wav
+*.mid
+
+# Large Binary SoundFonts
+midi-agent-skill/soundfonts/
+*.sf2
+
+# IDE & System Files
+.vscode/
+.idea/
+.DS_Store
+*.log

@@ -1,0 +1,8 @@
+# MIDI Generation Skill Dependencies
+
+# Required: MIDI file generation
+midiutil==1.2.1
+
+# Optional: For type checking during development
+# mypy>=1.0.0
+# types-dataclasses>=0.6.0

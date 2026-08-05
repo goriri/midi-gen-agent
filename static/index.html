@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADK MIDI Music Studio</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎵 ADK MIDI Music Studio</h1>
+      <p>AI Music Generator in Text Composition Format & WAV Audio Binary Format</p>
+    </header>
+
+    <div class="grid">
+      <!-- Left Column: Generator Inputs -->
+      <div class="card">
+        <div class="card-title">
+          <span>Create Composition</span>
+        </div>
+
+        <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Sample Prompts (Click to fill):</label>
+        <div class="sample-prompts">
+          <button class="chip" onclick="fillPrompt(1)">生成悠扬轻音乐</button>
+          <button class="chip" onclick="fillPrompt(2)">72BPM日系治愈民谣</button>
+          <button class="chip" onclick="fillPrompt(3)">Upbeat Pop 120BPM</button>
+          <button class="chip" onclick="fillPrompt(4)">A Minor Ballad 60BPM</button>
+        </div>
+
+        <textarea id="promptInput" placeholder="Describe the music you want to generate (style, BPM, key, instruments, duration, etc.)..."></textarea>
+
+        <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Select Output Format:</label>
+        <div class="format-options">
+          <button id="fmtAll" class="format-btn active" onclick="setFormat('all')">Both (Text & WAV)</button>
+          <button id="fmtComp" class="format-btn" onclick="setFormat('composition')">Text (Composition)</button>
+          <button id="fmtWav" class="format-btn" onclick="setFormat('wav')">Binary (WAV Audio)</button>
+        </div>
+
+        <button id="generateBtn" class="btn-primary" onclick="handleGenerate()">
+          <span id="btnText">✨ Generate Music</span>
+          <span id="btnLoader" class="loader hidden"></span>
+        </button>
+      </div>
+
+      <!-- Right Column: Current Result -->
+      <div class="card">
+        <div class="card-title">
+          <span>Current Generation</span>
+          <span id="genStatus" style="font-size: 0.85rem; color: var(--accent-emerald); font-weight: 600;"></span>
+        </div>
+
+        <div id="resultEmpty" style="text-align: center; color: var(--text-muted); padding: 3rem 0;">
+          <p>No generation yet.</p>
+          <p style="font-size: 0.85rem; margin-top: 0.5rem;">Submit a prompt on the left to compose music.</p>
+        </div>
+
+        <div id="resultContainer" class="hidden">
+          <!-- WAV Audio Player -->
+          <div id="audioSection" class="audio-player-container hidden">
+            <h4 style="font-size: 0.95rem; margin-bottom: 0.5rem;">🎧 WAV Binary Audio Output</h4>
+            <audio id="audioPlayer" controls></audio>
+            <div class="action-bar">
+              <a id="wavDownloadLink" class="btn-secondary" download style="text-decoration: none;">Download .WAV</a>
+              <a id="midiDownloadLink" class="btn-secondary" download style="text-decoration: none;">Download .MID</a>
+            </div>
+          </div>
+
+          <!-- Composition JSON Viewer -->
+          <div id="jsonSection" class="hidden">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <h4 style="font-size: 0.95rem;">📜 Text Composition Score (JSON)</h4>
+              <button id="convertBtn" class="btn-secondary" onclick="handleConvertCurrent()" style="font-size: 0.8rem;">🎼 Convert Text to WAV</button>
+            </div>
+            <pre id="jsonViewer"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Section: Generations History -->
+    <div class="card" style="margin-top: 2rem;">
+      <div class="card-title">
+        <span>📚 Previously Generated Music (Saved on Cloud)</span>
+        <button class="btn-secondary" onclick="fetchHistory()" style="font-size: 0.8rem;">🔄 Refresh</button>
+      </div>
+
+      <div id="historyList" class="history-list">
+        <!-- Dynamic History Items inserted here -->
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
