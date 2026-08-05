@@ -1,6 +1,7 @@
 """
 Durable database and Cloud Storage manager for MIDI Agent.
 Uses Google Cloud Firestore for metadata JSON and a PRIVATE Google Cloud Storage (GCS) bucket for WAV/MIDI binary files.
+Normalizes all file URLs to relative /output/{filename} endpoint URLs so public Web UI accesses files via server proxy.
 Supports local JSON filesystem fallback for offline development.
 """
 
@@ -35,6 +36,20 @@ except Exception as e:
     print(f"Cloud Storage fallback to local filesystem: {e}")
 
 
+def _normalize_record_urls(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensures wav_url and midi_url use relative /output/ endpoint URLs."""
+    if not record:
+        return record
+    rec = dict(record)
+    for key in ["wav_url", "midi_url"]:
+        val = rec.get(key)
+        if val and isinstance(val, str):
+            if "storage.googleapis.com" in val or val.startswith("http://") or val.startswith("https://"):
+                filename = Path(val).name
+                rec[key] = f"/output/{filename}"
+    return rec
+
+
 def upload_file_to_gcs(local_file_path: str) -> Optional[str]:
     """Uploads a binary file to private GCS bucket."""
     if not _storage_bucket or not os.path.exists(local_file_path):
@@ -58,11 +73,14 @@ def download_file_from_gcs(filename: str, destination_path: str) -> bool:
     try:
         blob = _storage_bucket.blob(f"output/{filename}")
         if blob.exists():
+            Path(destination_path).parent.mkdir(parents=True, exist_ok=True)
             blob.download_to_filename(destination_path)
             print(f"Downloaded {filename} from private GCS to {destination_path}")
             return True
+        else:
+            print(f"Blob output/{filename} does not exist in private GCS bucket")
     except Exception as e:
-        print(f"Error downloading from private GCS: {e}")
+        print(f"Error downloading {filename} from private GCS: {e}")
     return False
 
 
@@ -77,6 +95,9 @@ def save_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
     output_dir = Path(__file__).parent.parent / "midi-agent-skill" / "output"
     
+    # Normalize URLs to relative /output/ endpoint
+    record = _normalize_record_urls(record)
+
     if record.get("wav_url") and record["wav_url"].startswith("/output/"):
         wav_filename = record["wav_url"].replace("/output/", "")
         local_wav = output_dir / wav_filename
@@ -89,7 +110,7 @@ def save_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
         if local_midi.exists():
             upload_file_to_gcs(str(local_midi))
 
-    # Save to Firestore
+    # Save normalized record to Firestore
     if _firestore_db:
         try:
             doc_ref = _firestore_db.collection(COLLECTION_NAME).document(gen_id)
@@ -98,14 +119,13 @@ def save_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             print(f"Firestore save error: {e}")
 
-    # Local file backup
     save_local_history_backup(record)
     return record
 
 
 def get_all_generations() -> List[Dict[str, Any]]:
     """
-    Retrieves all generation records from Firestore (or local backup).
+    Retrieves all generation records from Firestore (or local backup) with normalized URLs.
     """
     records = []
     if _firestore_db:
@@ -114,14 +134,16 @@ def get_all_generations() -> List[Dict[str, Any]]:
                 "created_at", direction=firestore.Query.DESCENDING
             ).limit(50).stream()
             for doc in docs:
-                records.append(doc.to_dict())
+                rec = _normalize_record_urls(doc.to_dict())
+                records.append(rec)
             if records:
                 return records
         except Exception as e:
             print(f"Firestore query error: {e}")
 
     # Fallback to local history
-    return load_local_history_backup()
+    backup = load_local_history_backup()
+    return [_normalize_record_urls(r) for r in backup]
 
 
 def load_local_history_backup() -> List[Dict[str, Any]]:
