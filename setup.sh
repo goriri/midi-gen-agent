@@ -26,8 +26,9 @@ echo " Region:  ${REGION}"
 echo "=================================================="
 
 # 1. Enable Required Services
-echo "==> [1/3] Enabling Google Cloud Services..."
+echo "==> [1/4] Enabling Google Cloud Services..."
 gcloud services enable \
+  compute.googleapis.com \
   run.googleapis.com \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
@@ -47,6 +48,24 @@ spec:
 EOF
 gcloud org-policies set-policy "/tmp/allow_all_domains_${PROJECT_ID}.yaml" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
 rm -f "/tmp/allow_all_domains_${PROJECT_ID}.yaml"
+
+# Grant required IAM roles to Default Compute Service Account (needed for Cloud Run source build & runtime Vertex AI/GCS access on new projects)
+echo "==> [2/4] Configuring IAM roles for default service account..."
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+for ROLE in \
+  "roles/storage.admin" \
+  "roles/aiplatform.user" \
+  "roles/datastore.user" \
+  "roles/logging.logWriter" \
+  "roles/artifactregistry.writer" \
+  "roles/cloudbuild.builds.builder"; do
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="${ROLE}" \
+    --condition=None \
+    --quiet >/dev/null 2>&1 || true
+done
 
 # 2. Cloud Storage Bucket for MIDI and WAV files
 GCS_BUCKET_NAME="${PROJECT_ID}-midi-studio"
