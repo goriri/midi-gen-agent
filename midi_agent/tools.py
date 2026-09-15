@@ -52,25 +52,112 @@ def ensure_soundfont():
     return str(target_sf)
 
 
+def get_public_base_url() -> str:
+    """ Resolves the public base URL of the running Cloud Run service or local server. """
+    url = os.environ.get("DYNAMIC_APP_URL") or os.environ.get("APP_URL")
+    if url:
+        return url.rstrip("/")
+
+    # Fallback: If running on Cloud Run (K_SERVICE set), attempt self-discovery via Metadata + Cloud Run v2 API
+    k_service = os.environ.get("K_SERVICE")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    region = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+    if k_service and project:
+        try:
+            import urllib.request
+            meta_req = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+                headers={"Metadata-Flavor": "Google"}
+            )
+            with urllib.request.urlopen(meta_req, timeout=3) as resp:
+                token = json.loads(resp.read().decode("utf-8")).get("access_token")
+            if token:
+                run_url = f"https://run.googleapis.com/v2/projects/{project}/locations/{region}/services/{k_service}"
+                api_req = urllib.request.Request(run_url, headers={"Authorization": f"Bearer {token}"})
+                with urllib.request.urlopen(api_req, timeout=5) as resp:
+                    svc_data = json.loads(resp.read().decode("utf-8"))
+                    uri = svc_data.get("uri")
+                    if uri:
+                        os.environ["DYNAMIC_APP_URL"] = uri.rstrip("/")
+                        return uri.rstrip("/")
+        except Exception as e:
+            print(f"Cloud Run URL auto-discovery warning: {e}")
+
+    return "http://localhost:8000"
+
+
+from midi_agent.db import save_generation_record
+
+
+def _render_and_persist_all(prompt: str, fmt: str = "all") -> dict:
+    """
+    Core helper that generates composition JSON, binary MIDI (.mid), and synthesized WAV (.wav)
+    in a single pass, persists to Firestore + Private GCS, and returns complete public download URLs.
+    """
+    composition_dict = create_composition_dict(prompt)
+    midi_path = generate_midi_from_dict(composition_dict)
+
+    sf_path = ensure_soundfont()
+    options = ConvertOptions(soundfont_path=sf_path if os.path.exists(sf_path) else None)
+    wav_path = convert_to_wav(midi_path, options=options)
+
+    midi_filename = Path(midi_path).name
+    wav_filename = Path(wav_path).name
+    wav_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
+    midi_size = os.path.getsize(midi_path) if os.path.exists(midi_path) else 0
+
+    base_url = get_public_base_url()
+    wav_download_url = f"{base_url}/output/{wav_filename}"
+    midi_download_url = f"{base_url}/output/{midi_filename}"
+    primary_download_url = midi_download_url if fmt == "midi" else wav_download_url
+
+    # Durable persistence to Firestore and private GCS
+    try:
+        import uuid, datetime
+        gen_id = str(uuid.uuid4())[:8]
+        record = {
+            "id": gen_id,
+            "prompt": prompt,
+            "format": fmt,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "composition": composition_dict,
+            "midi_url": f"/output/{midi_filename}",
+            "wav_url": f"/output/{wav_filename}"
+        }
+        save_generation_record(record)
+    except Exception as e:
+        print(f"Warning: Failed to save record to storage: {e}")
+
+    return {
+        "status": "success",
+        "format": fmt,
+        "title": composition_dict.get("title"),
+        "bpm": composition_dict.get("bpm"),
+        "track_count": len(composition_dict.get("tracks", [])),
+        "actual_duration_seconds": composition_dict.get("actual_duration_seconds"),
+        "composition": composition_dict,
+        "file_name": midi_filename if fmt == "midi" else wav_filename,
+        "file_path": midi_path if fmt == "midi" else wav_path,
+        "midi_file": midi_path,
+        "wav_file": wav_path,
+        "file_size_bytes": midi_size if fmt == "midi" else wav_size,
+        "download_url": primary_download_url,
+        "wav_download_url": wav_download_url,
+        "midi_download_url": midi_download_url,
+    }
+
+
 def generate_composition_text(prompt: str) -> dict:
     """
-    Generates music composition in text/JSON format based on the user text prompt.
+    Generates music composition in text/JSON format along with downloadable MIDI and WAV links.
 
     Args:
         prompt: User music generation prompt specifying style, BPM, key, instruments, etc.
 
     Returns:
-        dict containing the structured composition (title, bpm, tracks with instruments and notes).
+        dict containing the structured composition and public download URLs for WAV and MIDI.
     """
-    composition_dict = create_composition_dict(prompt)
-    return {
-        "status": "success",
-        "format": "composition",
-        "composition": composition_dict
-    }
-
-
-from midi_agent.db import save_generation_record
+    return _render_and_persist_all(prompt, fmt="composition")
 
 
 def generate_midi_binary(prompt: str) -> dict:
@@ -81,44 +168,9 @@ def generate_midi_binary(prompt: str) -> dict:
         prompt: User music generation prompt specifying style, BPM, key, instruments, etc.
 
     Returns:
-        dict containing the status, composition details, file path, and public download URL.
+        dict containing the status, composition details, file path, and public download URLs.
     """
-    composition_dict = create_composition_dict(prompt)
-    midi_path = generate_midi_from_dict(composition_dict)
-    
-    file_size = os.path.getsize(midi_path) if os.path.exists(midi_path) else 0
-    filename = Path(midi_path).name
-    app_url = os.environ.get("APP_URL", "").rstrip("/")
-    download_url = f"{app_url}/output/{filename}" if app_url else f"/output/{filename}"
-
-    # Durable persistence to Firestore and private GCS
-    try:
-        import uuid, datetime
-        gen_id = str(uuid.uuid4())[:8]
-        record = {
-            "id": gen_id,
-            "prompt": prompt,
-            "format": "midi",
-            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "composition": composition_dict,
-            "midi_url": f"/output/{filename}",
-            "wav_url": None
-        }
-        save_generation_record(record)
-    except Exception as e:
-        print(f"Warning: Failed to save record to storage: {e}")
-
-    return {
-        "status": "success",
-        "format": "midi",
-        "file_name": filename,
-        "file_path": midi_path,
-        "download_url": download_url,
-        "file_size_bytes": file_size,
-        "bpm": composition_dict.get("bpm"),
-        "title": composition_dict.get("title"),
-        "track_count": len(composition_dict.get("tracks", []))
-    }
+    return _render_and_persist_all(prompt, fmt="midi")
 
 
 def generate_wav_binary(prompt: str) -> dict:
@@ -131,77 +183,19 @@ def generate_wav_binary(prompt: str) -> dict:
     Returns:
         dict containing the status, composition details, file path, and public download URLs for WAV and MIDI.
     """
-    composition_dict = create_composition_dict(prompt)
-    midi_path = generate_midi_from_dict(composition_dict)
-    
-    sf_path = ensure_soundfont()
-    options = ConvertOptions(soundfont_path=sf_path if os.path.exists(sf_path) else None)
-    
-    wav_path = convert_to_wav(midi_path, options=options)
-    file_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
-    filename = Path(wav_path).name
-    midi_filename = Path(midi_path).name
-    app_url = os.environ.get("APP_URL", "").rstrip("/")
-    download_url = f"{app_url}/output/{filename}" if app_url else f"/output/{filename}"
-    midi_download_url = f"{app_url}/output/{midi_filename}" if app_url else f"/output/{midi_filename}"
-
-    # Durable persistence to Firestore and private GCS
-    try:
-        import uuid, datetime
-        gen_id = str(uuid.uuid4())[:8]
-        record = {
-            "id": gen_id,
-            "prompt": prompt,
-            "format": "wav",
-            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "composition": composition_dict,
-            "midi_url": f"/output/{midi_filename}",
-            "wav_url": f"/output/{filename}"
-        }
-        save_generation_record(record)
-    except Exception as e:
-        print(f"Warning: Failed to save record to storage: {e}")
-
-    return {
-        "status": "success",
-        "format": "wav",
-        "file_name": filename,
-        "file_path": wav_path,
-        "download_url": download_url,
-        "midi_download_url": midi_download_url,
-        "file_size_bytes": file_size,
-        "bpm": composition_dict.get("bpm"),
-        "title": composition_dict.get("title"),
-        "track_count": len(composition_dict.get("tracks", []))
-    }
+    return _render_and_persist_all(prompt, fmt="wav")
 
 
-def generate_music(prompt: str, output_format: str = "composition") -> dict:
+def generate_music(prompt: str, output_format: str = "all") -> dict:
     """
     Generate MIDI music in the specified output format given a user prompt.
 
     Args:
         prompt: User music prompt (English or Chinese).
-        output_format: Desired format - 'composition' (text/JSON), 'midi' (binary MIDI file), 'wav' (binary audio WAV file), or 'all'.
+        output_format: Desired format - 'all' (default, generates composition + MIDI + WAV), 'wav', 'midi', or 'composition'.
 
     Returns:
-        dict containing generated output results.
+        dict containing generated output results including wav_download_url and midi_download_url.
     """
-    fmt = output_format.lower().strip()
-    if fmt == "wav":
-        return generate_wav_binary(prompt)
-    elif fmt == "midi":
-        return generate_midi_binary(prompt)
-    elif fmt == "all":
-        comp_res = generate_composition_text(prompt)
-        midi_res = generate_midi_binary(prompt)
-        wav_res = generate_wav_binary(prompt)
-        return {
-            "status": "success",
-            "format": "all",
-            "composition": comp_res["composition"],
-            "midi_file": midi_res["file_path"],
-            "wav_file": wav_res["file_path"]
-        }
-    else:
-        return generate_composition_text(prompt)
+    fmt = (output_format or "all").lower().strip()
+    return _render_and_persist_all(prompt, fmt=fmt)

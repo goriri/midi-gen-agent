@@ -33,11 +33,13 @@ Instructions & Best Practices:
   - **Key & Scale**: e.g., C大调 (C Major), A小调 (A Minor)
   - **Instruments**: Map Chinese & English names to GM instruments (e.g. 原声钢琴 -> acoustic-grand-piano, 尼龙木吉他 -> acoustic-guitar-nylon, 小提琴 -> violin, 风铃 -> tinkle-bell)
   - **Drums**: Respect "不要鼓点" / "no drums" constraints
-  - **Output Format**: Determine whether the user asked for composition format (text/JSON), MIDI binary, or WAV audio binary format.
-- Always invoke the appropriate tool (`generate_music`, `generate_composition_text`, `generate_midi_binary`, or `generate_wav_binary`).
-- When binary files are generated, ALWAYS include clickable Markdown download links in your final response using the `download_url` (and `midi_download_url` if applicable) returned by the tool, for example:
-  - 🎵 [Download WAV Audio](<download_url>)
-  - 🎼 [Download MIDI File](<midi_download_url>)
+  - **Output Format**: Default to calling `generate_music(prompt, output_format="all")` so the user gets both the composition structure and downloadable audio files.
+- CRITICAL DOWNLOAD URL RULE:
+  - NEVER invent, guess, or fabricate URLs (NEVER use `storage.googleapis.com`, `h8p-adk-music-output`, or any other external domain).
+  - You MUST ONLY use the EXACT `wav_download_url` and `midi_download_url` fields returned in the tool output dictionary.
+  - Format the download links clearly in your response as:
+    - 🎵 [Download WAV Audio](<exact wav_download_url from tool output>)
+    - 🎼 [Download MIDI File](<exact midi_download_url from tool output>)
 - Provide a clear summary of the generated music (Title, BPM, Key, Instruments, Estimated Duration, and Clickable Download Links) in your final response.
 """
 

@@ -21,7 +21,7 @@ if str(ROOT_DIR) not in sys.path:
 if str(SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_DIR))
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,6 +83,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def capture_request_base_url(request: Request, call_next):
+    """Automatically captures the live public Cloud Run / host URL on every request."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    proto = request.headers.get("x-forwarded-proto", "https")
+    if host and not host.startswith(("localhost", "127.0.0.1", "0.0.0.0")):
+        os.environ["DYNAMIC_APP_URL"] = f"{proto}://{host}".rstrip("/")
+    elif host and not os.environ.get("APP_URL"):
+        os.environ["DYNAMIC_APP_URL"] = f"http://{host}".rstrip("/")
+    return await call_next(request)
 
 # Directories
 OUTPUT_DIR = SKILL_DIR / "output"

@@ -11,8 +11,8 @@ import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "cellular-cider-495602-r9")
-GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "cellular-cider-495602-r9-midi-studio")
+GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT") or "cellular-cider-495602-r9"
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME") or f"{GCP_PROJECT}-midi-studio"
 COLLECTION_NAME = "generations"
 
 # Fallback local paths
@@ -22,6 +22,7 @@ LOCAL_HISTORY_FILE = STORAGE_DIR / "generations.json"
 
 # Initialize GCP clients
 _firestore_db = None
+_storage_client = None
 _storage_bucket = None
 
 try:
@@ -51,17 +52,30 @@ def _normalize_record_urls(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def upload_file_to_gcs(local_file_path: str) -> Optional[str]:
-    """Uploads a binary file to private GCS bucket."""
+    """Uploads a binary file to private GCS bucket, auto-creating bucket if needed."""
+    global _storage_bucket
     if not _storage_bucket or not os.path.exists(local_file_path):
         return None
 
+    filename = Path(local_file_path).name
     try:
-        filename = Path(local_file_path).name
         blob = _storage_bucket.blob(f"output/{filename}")
         blob.upload_from_filename(local_file_path)
         print(f"Uploaded {filename} to private GCS bucket {GCS_BUCKET_NAME}")
         return f"/output/{filename}"
     except Exception as e:
+        err_str = str(e)
+        if ("NotFound" in err_str or "404" in err_str or "NoSuchBucket" in err_str) and _storage_client:
+            try:
+                location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+                print(f"Bucket {GCS_BUCKET_NAME} not found; auto-creating in {location}...")
+                _storage_bucket = _storage_client.create_bucket(GCS_BUCKET_NAME, location=location)
+                blob = _storage_bucket.blob(f"output/{filename}")
+                blob.upload_from_filename(local_file_path)
+                print(f"Uploaded {filename} to newly created GCS bucket {GCS_BUCKET_NAME}")
+                return f"/output/{filename}"
+            except Exception as inner_e:
+                print(f"Auto-create bucket failed: {inner_e}")
         print(f"Error uploading to private GCS: {e}")
         return None
 
@@ -110,14 +124,27 @@ def save_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
         if local_midi.exists():
             upload_file_to_gcs(str(local_midi))
 
-    # Save normalized record to Firestore
+    # Save normalized record to Firestore (if Native mode)
+    firestore_saved = False
     if _firestore_db:
         try:
             doc_ref = _firestore_db.collection(COLLECTION_NAME).document(gen_id)
             doc_ref.set(record)
             print(f"Saved generation #{gen_id} to Firestore")
+            firestore_saved = True
         except Exception as e:
-            print(f"Firestore save error: {e}")
+            print(f"Firestore save fallback to GCS metadata: {e}")
+
+    # Always save metadata JSON to private GCS bucket for Datastore Mode / multi-instance durability
+    if _storage_bucket:
+        try:
+            meta_blob = _storage_bucket.blob(f"generations/{gen_id}.json")
+            meta_blob.upload_from_string(
+                json.dumps(record, ensure_ascii=False, indent=2),
+                content_type="application/json"
+            )
+        except Exception as e:
+            print(f"GCS metadata save warning: {e}")
 
     save_local_history_backup(record)
     return record
@@ -125,7 +152,7 @@ def save_generation_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_all_generations() -> List[Dict[str, Any]]:
     """
-    Retrieves all generation records from Firestore (or local backup) with normalized URLs.
+    Retrieves all generation records from Firestore, GCS metadata, or local backup with normalized URLs.
     """
     records = []
     if _firestore_db:
@@ -139,7 +166,21 @@ def get_all_generations() -> List[Dict[str, Any]]:
             if records:
                 return records
         except Exception as e:
-            print(f"Firestore query error: {e}")
+            print(f"Firestore query fallback to GCS metadata: {e}")
+
+    # Fallback to GCS metadata blobs (works in Datastore Mode projects)
+    if _storage_bucket:
+        try:
+            blobs = list(_storage_bucket.list_blobs(prefix="generations/"))
+            for blob in blobs:
+                if blob.name.endswith(".json"):
+                    data = json.loads(blob.download_as_text())
+                    records.append(_normalize_record_urls(data))
+            if records:
+                records.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+                return records[:50]
+        except Exception as e:
+            print(f"GCS metadata query warning: {e}")
 
     # Fallback to local history
     backup = load_local_history_backup()

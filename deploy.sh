@@ -70,6 +70,8 @@ if [ -f "${SCRIPT_DIR}/setup.sh" ]; then
 fi
 
 GCS_BUCKET_NAME="${PROJECT_ID}-midi-studio"
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
+DETERMINISTIC_URL="https://${SERVICE_NAME}-${PROJECT_NUMBER}.${REGION}.run.app"
 
 # 2. Deploy Cloud Run Service
 echo "==> [2/4] Deploying Cloud Run Service: ${SERVICE_NAME}..."
@@ -83,22 +85,24 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances="10" \
   --concurrency="8" \
   --allow-unauthenticated \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=True,GCS_BUCKET_NAME=${GCS_BUCKET_NAME},GEMINI_MODEL=gemini-2.5-flash" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=True,GCS_BUCKET_NAME=${GCS_BUCKET_NAME},GEMINI_MODEL=gemini-2.5-flash,APP_URL=${DETERMINISTIC_URL}" \
   --quiet
 
-SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")
+SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)" || echo "${DETERMINISTIC_URL}")
+if [ -z "${SERVICE_URL}" ]; then
+  SERVICE_URL="${DETERMINISTIC_URL}"
+fi
 echo "    ✓ Service deployed at: ${SERVICE_URL}"
 
-# Update APP_URL env var on the service so A2A agent card advertises the real URL
+# Update APP_URL env var on the service so A2A agent card advertises the canonical URL
 gcloud run services update "${SERVICE_NAME}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --update-env-vars="APP_URL=${SERVICE_URL}" \
-  --quiet
+  --quiet || true
 
 # 3. Configure Discovery Engine IAM Invoker
 echo "==> [3/4] Granting Invoker permission to Discovery Engine service agent..."
-PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
 DISCOVERY_ENGINE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
 
 gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
