@@ -35,7 +35,18 @@ gcloud services enable \
   discoveryengine.googleapis.com \
   storage.googleapis.com \
   firestore.googleapis.com \
+  orgpolicy.googleapis.com \
   --project="${PROJECT_ID}"
+
+# Ensure Cloud Run unauthenticated access is permitted by Org Policy (if applicable)
+cat <<EOF > /tmp/allow_all_domains_${PROJECT_ID}.yaml
+name: projects/${PROJECT_ID}/policies/iam.allowedPolicyMemberDomains
+spec:
+  rules:
+  - allowAll: true
+EOF
+gcloud org-policies set-policy "/tmp/allow_all_domains_${PROJECT_ID}.yaml" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+rm -f "/tmp/allow_all_domains_${PROJECT_ID}.yaml"
 
 # 2. Cloud Storage Bucket for MIDI and WAV files
 GCS_BUCKET_NAME="${PROJECT_ID}-midi-studio"
