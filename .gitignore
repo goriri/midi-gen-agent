@@ -29,3 +29,7 @@ midi-agent-skill/soundfonts/
 .idea/
 .DS_Store
 *.log
+*.zip
+*.mp4
+demo_recordings/
+record_demo.py

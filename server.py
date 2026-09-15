@@ -27,12 +27,53 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import contextlib
 from midi_agent.tools import generate_music, ensure_soundfont
 from midi_agent.db import save_generation_record, get_all_generations, download_file_from_gcs
 from skills.generate_midi import generate_midi_from_dict
 from skills.convert_to_wav import convert_to_wav, ConvertOptions
 
-app = FastAPI(title="ADK MIDI Agent Web UI")
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Mount A2A (Agent-to-Agent) routes dynamically for Gemini Enterprise and A2A clients."""
+    try:
+        from a2a.server.tasks import InMemoryTaskStore
+        from a2a.server.apps import A2AFastAPIApplication
+        from a2a.server.request_handlers import DefaultRequestHandler
+        from a2a.types import AgentCapabilities
+        from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
+        from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from midi_agent.agent import root_agent
+
+        session_service = InMemorySessionService()
+        runner = Runner(agent=root_agent, app_name="app", session_service=session_service, auto_create_session=True)
+        app.state.runner = runner
+
+        app_url = os.environ.get("APP_URL", "http://0.0.0.0:8080").rstrip("/")
+        card = await AgentCardBuilder(
+            agent=root_agent,
+            capabilities=AgentCapabilities(streaming=True),
+            rpc_url=f"{app_url}/a2a/app",
+            agent_version="0.1.0"
+        ).build()
+
+        handler = DefaultRequestHandler(
+            agent_executor=A2aAgentExecutor(runner=runner),
+            task_store=InMemoryTaskStore()
+        )
+        a2a_app = A2AFastAPIApplication(agent_card=card, http_handler=handler)
+        a2a_app.add_routes_to_app(app, agent_card_url="/a2a/app/.well-known/agent-card.json", rpc_url="/a2a/app")
+        print("[A2A] Mounted A2A protocol routes and agent-card endpoint at /a2a/app")
+    except Exception as e:
+        print(f"[A2A] Warning: Could not initialize A2A routes: {e}")
+
+    yield
+
+
+app = FastAPI(title="ADK MIDI Agent Web UI", lifespan=lifespan)
 
 # Enable CORS
 app.add_middleware(

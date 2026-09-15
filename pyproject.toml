@@ -1,0 +1,31 @@
+[project]
+name = "midi-gen-agent"
+version = "0.1.0"
+description = "ADK MIDI Composition Studio — AI Music Composer agent powered by Google ADK."
+requires-python = ">=3.11, <3.14"
+dependencies = [
+    "google-adk>=2.6.0",
+    "google-cloud-aiplatform[agent_engines]>=1.80.0",
+    "google-cloud-storage>=3.13.0",
+    "google-cloud-firestore>=2.28.0",
+    "google-genai>=2.16.0",
+    "midiutil>=1.2.1",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "requests>=2.31.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.agents-cli]
+project_name = "midi-gen-agent"
+version = "0.1.0"
+agent_directory = "midi_agent"
+region = "us-central1"
+
+[tool.agents-cli.create_params]
+deployment_target = "cloud_run"

@@ -1,0 +1,24 @@
+name: midi-gen-agent
+type: adk
+displayName:
+  zh: ADK 音乐生成与编曲工作室
+  en: ADK MIDI Composition Studio
+description:
+  zh: 基于Google ADK与通用MIDI规范（GM）的AI编曲智能体，支持中英文自然语言生成五线谱曲谱（JSON）、标准MIDI文件与高质量WAV合成音频。
+  en: AI Music Composer agent powered by Google ADK and General MIDI (GM) standards. Generates structured compositions, binary MIDI files (.mid), and synthesized WAV audio from text prompts.
+industry:
+  - technology
+  - media-entertainment
+persona:
+  - product
+  - creative
+useCase:
+  - content-generation
+  - process-automation
+tags:
+  - music-generation
+  - midi
+  - adk
+  - fluidsynth
+  - audio-synthesis
+geAgentUrl: https://adk-midi-studio-766918001064.us-central1.run.app

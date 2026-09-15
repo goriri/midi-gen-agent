@@ -38,9 +38,13 @@ Instructions & Best Practices:
 - Provide a summary of the generated music (BPM, Key, Instruments, Duration, Output file path) in your final response.
 """
 
+import os
+
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
 root_agent = Agent(
     name="midi_agent",
-    model="gemini-flash-latest",
+    model=MODEL,
     instruction=SYSTEM_INSTRUCTION,
     description="Generates MIDI music in composition format (text/JSON) or binary files (.mid / .wav) from text prompts.",
     tools=[generate_music, generate_composition_text, generate_midi_binary, generate_wav_binary]

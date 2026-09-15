@@ -107,18 +107,24 @@ python -m unittest discover -s tests
 
 ---
 
-## Deployment to Google Cloud Run
+## One-Click Deployment (AgentHub & Standalone)
 
-To build and deploy the containerized studio to Google Cloud Run:
+To deploy the entire agent stack (Cloud Run container, Firestore, GCS bucket, IAM bindings, and optional Gemini Enterprise registration) in one click:
 
 ```bash
-# Set project and deploy
-gcloud config set project YOUR_GCP_PROJECT_ID
-gcloud run deploy adk-midi-studio \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated
+# Standalone deployment
+./deploy.sh <YOUR_GCP_PROJECT_ID>
+
+# One-click deployment with Gemini Enterprise registration
+./deploy.sh <YOUR_GCP_PROJECT_ID> --ge <YOUR_GE_APP_ID>
 ```
+
+### Agent-to-Agent (A2A) & Gemini Enterprise Endpoints
+
+The service natively serves the Google Agent-to-Agent (A2A) protocol:
+- **A2A Agent Card**: `https://<SERVICE_URL>/a2a/app/.well-known/agent-card.json`
+- **A2A JSON-RPC**: `https://<SERVICE_URL>/a2a/app`
+- **Interactive Web Studio**: `https://<SERVICE_URL>/`
 
 ---
 
