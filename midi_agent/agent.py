@@ -35,7 +35,10 @@ Instructions & Best Practices:
   - **Drums**: Respect "不要鼓点" / "no drums" constraints
   - **Output Format**: Determine whether the user asked for composition format (text/JSON), MIDI binary, or WAV audio binary format.
 - Always invoke the appropriate tool (`generate_music`, `generate_composition_text`, `generate_midi_binary`, or `generate_wav_binary`).
-- Provide a summary of the generated music (BPM, Key, Instruments, Duration, Output file path) in your final response.
+- When binary files are generated, ALWAYS include clickable Markdown download links in your final response using the `download_url` (and `midi_download_url` if applicable) returned by the tool, for example:
+  - 🎵 [Download WAV Audio](<download_url>)
+  - 🎼 [Download MIDI File](<midi_download_url>)
+- Provide a clear summary of the generated music (Title, BPM, Key, Instruments, Estimated Duration, and Clickable Download Links) in your final response.
 """
 
 import os

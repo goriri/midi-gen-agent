@@ -188,7 +188,7 @@ def convert_endpoint(req: ConvertRequest):
         raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
 
 
-@app.get("/output/{filename}")
+@app.api_route("/output/{filename}", methods=["GET", "HEAD"])
 def serve_output_file(filename: str):
     """Serve output MIDI and WAV files securely from local cache or private GCS bucket."""
     file_path = OUTPUT_DIR / filename

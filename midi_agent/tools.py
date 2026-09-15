@@ -70,6 +70,9 @@ def generate_composition_text(prompt: str) -> dict:
     }
 
 
+from midi_agent.db import save_generation_record
+
+
 def generate_midi_binary(prompt: str) -> dict:
     """
     Generates music and saves it as a binary MIDI (.mid) file based on the user text prompt.
@@ -78,16 +81,39 @@ def generate_midi_binary(prompt: str) -> dict:
         prompt: User music generation prompt specifying style, BPM, key, instruments, etc.
 
     Returns:
-        dict containing the status, composition details, and the file path of the binary MIDI file.
+        dict containing the status, composition details, file path, and public download URL.
     """
     composition_dict = create_composition_dict(prompt)
     midi_path = generate_midi_from_dict(composition_dict)
     
     file_size = os.path.getsize(midi_path) if os.path.exists(midi_path) else 0
+    filename = Path(midi_path).name
+    app_url = os.environ.get("APP_URL", "").rstrip("/")
+    download_url = f"{app_url}/output/{filename}" if app_url else f"/output/{filename}"
+
+    # Durable persistence to Firestore and private GCS
+    try:
+        import uuid, datetime
+        gen_id = str(uuid.uuid4())[:8]
+        record = {
+            "id": gen_id,
+            "prompt": prompt,
+            "format": "midi",
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "composition": composition_dict,
+            "midi_url": f"/output/{filename}",
+            "wav_url": None
+        }
+        save_generation_record(record)
+    except Exception as e:
+        print(f"Warning: Failed to save record to storage: {e}")
+
     return {
         "status": "success",
         "format": "midi",
+        "file_name": filename,
         "file_path": midi_path,
+        "download_url": download_url,
         "file_size_bytes": file_size,
         "bpm": composition_dict.get("bpm"),
         "title": composition_dict.get("title"),
@@ -103,7 +129,7 @@ def generate_wav_binary(prompt: str) -> dict:
         prompt: User music generation prompt specifying style, BPM, key, instruments, etc.
 
     Returns:
-        dict containing the status, composition details, and the file path of the binary WAV audio file.
+        dict containing the status, composition details, file path, and public download URLs for WAV and MIDI.
     """
     composition_dict = create_composition_dict(prompt)
     midi_path = generate_midi_from_dict(composition_dict)
@@ -113,11 +139,36 @@ def generate_wav_binary(prompt: str) -> dict:
     
     wav_path = convert_to_wav(midi_path, options=options)
     file_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
-    
+    filename = Path(wav_path).name
+    midi_filename = Path(midi_path).name
+    app_url = os.environ.get("APP_URL", "").rstrip("/")
+    download_url = f"{app_url}/output/{filename}" if app_url else f"/output/{filename}"
+    midi_download_url = f"{app_url}/output/{midi_filename}" if app_url else f"/output/{midi_filename}"
+
+    # Durable persistence to Firestore and private GCS
+    try:
+        import uuid, datetime
+        gen_id = str(uuid.uuid4())[:8]
+        record = {
+            "id": gen_id,
+            "prompt": prompt,
+            "format": "wav",
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "composition": composition_dict,
+            "midi_url": f"/output/{midi_filename}",
+            "wav_url": f"/output/{filename}"
+        }
+        save_generation_record(record)
+    except Exception as e:
+        print(f"Warning: Failed to save record to storage: {e}")
+
     return {
         "status": "success",
         "format": "wav",
+        "file_name": filename,
         "file_path": wav_path,
+        "download_url": download_url,
+        "midi_download_url": midi_download_url,
         "file_size_bytes": file_size,
         "bpm": composition_dict.get("bpm"),
         "title": composition_dict.get("title"),
