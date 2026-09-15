@@ -86,13 +86,40 @@ def get_public_base_url() -> str:
     return "http://localhost:8000"
 
 
-from midi_agent.db import save_generation_record
+from midi_agent.db import save_generation_record, GCS_BUCKET_NAME
+
+
+def _select_accessible_urls(wav_filename: str, midi_filename: str, base_url: str, bucket_name: str) -> tuple[str, str, str, str]:
+    """
+    Determines the best accessible download URLs for browser users.
+    If Cloud Run unauthenticated access (allUsers) is blocked by GCP Organization Policy
+    (returning 403 Forbidden on /output/...), automatically falls back to Google Cloud Storage
+    cookie-authenticated browser URLs (https://storage.cloud.google.com/<bucket>/output/<file>).
+    """
+    cloud_run_wav = f"{base_url}/output/{wav_filename}"
+    cloud_run_midi = f"{base_url}/output/{midi_filename}"
+    gcs_auth_wav = f"https://storage.cloud.google.com/{bucket_name}/output/{wav_filename}"
+    gcs_auth_midi = f"https://storage.cloud.google.com/{bucket_name}/output/{midi_filename}"
+
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        return cloud_run_wav, cloud_run_midi, gcs_auth_wav, gcs_auth_midi
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(cloud_run_wav, method="HEAD")
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status == 200:
+                return cloud_run_wav, cloud_run_midi, gcs_auth_wav, gcs_auth_midi
+    except Exception as e:
+        print(f"Cloud Run unauthenticated probe returned non-200 ({e}); using storage.cloud.google.com authenticated URLs.")
+
+    return gcs_auth_wav, gcs_auth_midi, gcs_auth_wav, gcs_auth_midi
 
 
 def _render_and_persist_all(prompt: str, fmt: str = "all") -> dict:
     """
     Core helper that generates composition JSON, binary MIDI (.mid), and synthesized WAV (.wav)
-    in a single pass, persists to Firestore + Private GCS, and returns complete public download URLs.
+    in a single pass, persists to Firestore + GCS, and returns verified download URLs.
     """
     composition_dict = create_composition_dict(prompt)
     midi_path = generate_midi_from_dict(composition_dict)
@@ -106,12 +133,7 @@ def _render_and_persist_all(prompt: str, fmt: str = "all") -> dict:
     wav_size = os.path.getsize(wav_path) if os.path.exists(wav_path) else 0
     midi_size = os.path.getsize(midi_path) if os.path.exists(midi_path) else 0
 
-    base_url = get_public_base_url()
-    wav_download_url = f"{base_url}/output/{wav_filename}"
-    midi_download_url = f"{base_url}/output/{midi_filename}"
-    primary_download_url = midi_download_url if fmt == "midi" else wav_download_url
-
-    # Durable persistence to Firestore and private GCS
+    # Durable persistence to Firestore and GCS first so files exist in GCS bucket
     try:
         import uuid, datetime
         gen_id = str(uuid.uuid4())[:8]
@@ -127,6 +149,12 @@ def _render_and_persist_all(prompt: str, fmt: str = "all") -> dict:
         save_generation_record(record)
     except Exception as e:
         print(f"Warning: Failed to save record to storage: {e}")
+
+    base_url = get_public_base_url()
+    wav_download_url, midi_download_url, gcs_auth_wav, gcs_auth_midi = _select_accessible_urls(
+        wav_filename, midi_filename, base_url, GCS_BUCKET_NAME
+    )
+    primary_download_url = midi_download_url if fmt == "midi" else wav_download_url
 
     return {
         "status": "success",
@@ -144,6 +172,8 @@ def _render_and_persist_all(prompt: str, fmt: str = "all") -> dict:
         "download_url": primary_download_url,
         "wav_download_url": wav_download_url,
         "midi_download_url": midi_download_url,
+        "gcs_authenticated_wav_url": gcs_auth_wav,
+        "gcs_authenticated_midi_url": gcs_auth_midi,
     }
 
 

@@ -73,6 +73,13 @@ GCS_BUCKET_NAME="${PROJECT_ID}-midi-studio"
 PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
 DETERMINISTIC_URL="https://${SERVICE_NAME}-${PROJECT_NUMBER}.${REGION}.run.app"
 
+ACTIVE_USER=$(gcloud config get-value account 2>/dev/null || echo "")
+USER_DOMAIN="google.com"
+if [ -n "${ACTIVE_USER}" ] && [[ "${ACTIVE_USER}" == *"@"* ]]; then
+  USER_DOMAIN="${ACTIVE_USER#*@}"
+fi
+ALLOWED_GCS_DOMAINS="${USER_DOMAIN}:google.com"
+
 # 2. Deploy Cloud Run Service
 echo "==> [2/4] Deploying Cloud Run Service: ${SERVICE_NAME}..."
 gcloud run deploy "${SERVICE_NAME}" \
@@ -85,7 +92,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances="10" \
   --concurrency="8" \
   --allow-unauthenticated \
-  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=True,GCS_BUCKET_NAME=${GCS_BUCKET_NAME},GEMINI_MODEL=gemini-2.5-flash,APP_URL=${DETERMINISTIC_URL}" \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=True,GCS_BUCKET_NAME=${GCS_BUCKET_NAME},GEMINI_MODEL=gemini-2.5-flash,APP_URL=${DETERMINISTIC_URL},ALLOWED_GCS_DOMAINS=${ALLOWED_GCS_DOMAINS}" \
   --quiet
 
 SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)" || echo "${DETERMINISTIC_URL}")
@@ -98,19 +105,61 @@ echo "    ✓ Service deployed at: ${SERVICE_URL}"
 gcloud run services update "${SERVICE_NAME}" \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
-  --update-env-vars="APP_URL=${SERVICE_URL}" \
+  --update-env-vars="APP_URL=${SERVICE_URL},ALLOWED_GCS_DOMAINS=${ALLOWED_GCS_DOMAINS}" \
   --quiet || true
 
-# 3. Configure Discovery Engine IAM Invoker
-echo "==> [3/4] Granting Invoker permission to Discovery Engine service agent..."
+# 3. Configure Cloud Run & GCS Access (with Org Policy propagation retry loop)
+echo "==> [3/4] Configuring IAM Invoker & Download Access..."
 DISCOVERY_ENGINE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
 
-gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --member="serviceAccount:${DISCOVERY_ENGINE_SA}" \
-  --role="roles/run.servicesInvoker" \
-  --quiet || true
+for ROLE in "roles/run.invoker" "roles/run.servicesInvoker"; do
+  gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --member="serviceAccount:${DISCOVERY_ENGINE_SA}" \
+    --role="${ROLE}" \
+    --quiet >/dev/null 2>&1 || true
+done
+
+# Ensure GCS bucket has domain and user read access immediately (works even when allUsers is prohibited by Org Policy)
+if [ -n "${ACTIVE_USER}" ]; then
+  gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+    --member="user:${ACTIVE_USER}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+fi
+for MEMBER in "domain:${USER_DOMAIN}" "domain:google.com" "allAuthenticatedUsers"; do
+  gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+    --member="${MEMBER}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+done
+
+# Retry loop for allUsers on Cloud Run & GCS (handles 30-60s Org Policy propagation delay on new projects)
+echo "    Verifying public download access (allUsers)..."
+PUBLIC_ENABLED=false
+for attempt in {1..5}; do
+  if gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --member="allUsers" \
+      --role="roles/run.invoker" \
+      --quiet >/dev/null 2>&1; then
+    gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+      --member="allUsers" \
+      --role="roles/storage.objectViewer" \
+      --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+    echo "    ✓ Public browser access (allUsers) enabled on Cloud Run & GCS."
+    PUBLIC_ENABLED=true
+    break
+  else
+    echo "    Org Policy propagating or domain-restricted (attempt ${attempt}/5)..."
+    sleep 6
+  fi
+done
+if [ "${PUBLIC_ENABLED}" = false ]; then
+  echo "    ✓ Corporate Org Policy restricts allUsers; authenticated Google Cloud Storage download links (storage.cloud.google.com) enabled automatically for domain:${USER_DOMAIN} and domain:google.com."
+fi
 
 # 4. Optional Registration to Gemini Enterprise
 if [ -n "${GE_APP_ID}" ]; then

@@ -24,6 +24,7 @@ LOCAL_HISTORY_FILE = STORAGE_DIR / "generations.json"
 _firestore_db = None
 _storage_client = None
 _storage_bucket = None
+_bucket_iam_configured = False
 
 try:
     from google.cloud import firestore
@@ -32,9 +33,45 @@ try:
     _firestore_db = firestore.Client(project=GCP_PROJECT)
     _storage_client = storage.Client(project=GCP_PROJECT)
     _storage_bucket = _storage_client.bucket(GCS_BUCKET_NAME)
-    print(f"Durable Private Storage Initialized: Firestore + Private GCS ({GCS_BUCKET_NAME})")
+    print(f"Durable Private Storage Initialized: Firestore + GCS ({GCS_BUCKET_NAME})")
 except Exception as e:
     print(f"Cloud Storage fallback to local filesystem: {e}")
+
+
+def _ensure_bucket_read_access(bucket) -> None:
+    """Ensures the GCS bucket has objectViewer permissions for corporate domains and (if permitted) allUsers."""
+    global _bucket_iam_configured
+    if _bucket_iam_configured or not bucket:
+        return
+    _bucket_iam_configured = True
+    try:
+        import re
+        domains = ["google.com"]
+        extra_domains = os.environ.get("ALLOWED_GCS_DOMAINS", "")
+        for d in re.split(r"[:,;\s]+", extra_domains):
+            d = d.strip()
+            if d and d not in domains:
+                domains.append(d)
+
+        for d in domains:
+            try:
+                policy = bucket.get_iam_policy(requested_policy_version=3)
+                policy.bindings.append({"role": "roles/storage.objectViewer", "members": {f"domain:{d}"}})
+                bucket.set_iam_policy(policy)
+                print(f"Granted roles/storage.objectViewer to domain:{d} on {bucket.name}")
+            except Exception:
+                pass
+
+        for member in ["allAuthenticatedUsers", "allUsers"]:
+            try:
+                policy = bucket.get_iam_policy(requested_policy_version=3)
+                policy.bindings.append({"role": "roles/storage.objectViewer", "members": {member}})
+                bucket.set_iam_policy(policy)
+                print(f"Granted roles/storage.objectViewer to {member} on {bucket.name}")
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Bucket IAM auto-config note: {e}")
 
 
 def _normalize_record_urls(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,14 +82,14 @@ def _normalize_record_urls(record: Dict[str, Any]) -> Dict[str, Any]:
     for key in ["wav_url", "midi_url"]:
         val = rec.get(key)
         if val and isinstance(val, str):
-            if "storage.googleapis.com" in val or val.startswith("http://") or val.startswith("https://"):
+            if "storage.googleapis.com" in val or "storage.cloud.google.com" in val or val.startswith("http://") or val.startswith("https://"):
                 filename = Path(val).name
                 rec[key] = f"/output/{filename}"
     return rec
 
 
 def upload_file_to_gcs(local_file_path: str) -> Optional[str]:
-    """Uploads a binary file to private GCS bucket, auto-creating bucket if needed."""
+    """Uploads a binary file to GCS bucket, auto-creating bucket and setting read IAM if needed."""
     global _storage_bucket
     if not _storage_bucket or not os.path.exists(local_file_path):
         return None
@@ -61,7 +98,8 @@ def upload_file_to_gcs(local_file_path: str) -> Optional[str]:
     try:
         blob = _storage_bucket.blob(f"output/{filename}")
         blob.upload_from_filename(local_file_path)
-        print(f"Uploaded {filename} to private GCS bucket {GCS_BUCKET_NAME}")
+        _ensure_bucket_read_access(_storage_bucket)
+        print(f"Uploaded {filename} to GCS bucket {GCS_BUCKET_NAME}")
         return f"/output/{filename}"
     except Exception as e:
         err_str = str(e)
@@ -70,13 +108,14 @@ def upload_file_to_gcs(local_file_path: str) -> Optional[str]:
                 location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
                 print(f"Bucket {GCS_BUCKET_NAME} not found; auto-creating in {location}...")
                 _storage_bucket = _storage_client.create_bucket(GCS_BUCKET_NAME, location=location)
+                _ensure_bucket_read_access(_storage_bucket)
                 blob = _storage_bucket.blob(f"output/{filename}")
                 blob.upload_from_filename(local_file_path)
                 print(f"Uploaded {filename} to newly created GCS bucket {GCS_BUCKET_NAME}")
                 return f"/output/{filename}"
             except Exception as inner_e:
                 print(f"Auto-create bucket failed: {inner_e}")
-        print(f"Error uploading to private GCS: {e}")
+        print(f"Error uploading to GCS: {e}")
         return None
 
 

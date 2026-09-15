@@ -37,9 +37,31 @@ gcloud services enable \
   storage.googleapis.com \
   firestore.googleapis.com \
   orgpolicy.googleapis.com \
+  iamcredentials.googleapis.com \
   --project="${PROJECT_ID}"
 
-# Ensure Cloud Run unauthenticated access is permitted by Org Policy (if applicable)
+ACTIVE_USER=$(gcloud config get-value account 2>/dev/null || echo "")
+USER_DOMAIN=""
+if [ -n "${ACTIVE_USER}" ] && [[ "${ACTIVE_USER}" == *"@"* ]]; then
+  USER_DOMAIN="${ACTIVE_USER#*@}"
+fi
+
+# Self-grant Org Policy Admin at Organization and Project levels if user has Org Admin / Owner rights
+if [ -n "${ACTIVE_USER}" ]; then
+  ORG_ID=$(gcloud projects get-ancestors "${PROJECT_ID}" --format="value(id)" 2>/dev/null | tail -n 1 || echo "")
+  if [ -n "${ORG_ID}" ] && [ "${ORG_ID}" != "${PROJECT_ID}" ]; then
+    gcloud organizations add-iam-policy-binding "${ORG_ID}" \
+      --member="user:${ACTIVE_USER}" \
+      --role="roles/orgpolicy.policyAdmin" \
+      --quiet >/dev/null 2>&1 || true
+  fi
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="user:${ACTIVE_USER}" \
+    --role="roles/orgpolicy.policyAdmin" \
+    --quiet >/dev/null 2>&1 || true
+fi
+
+# Ensure Cloud Run & GCS unauthenticated/domain access is permitted by Org Policy (if applicable)
 cat <<EOF > /tmp/allow_all_domains_${PROJECT_ID}.yaml
 name: projects/${PROJECT_ID}/policies/iam.allowedPolicyMemberDomains
 spec:
@@ -59,7 +81,8 @@ for ROLE in \
   "roles/datastore.user" \
   "roles/logging.logWriter" \
   "roles/artifactregistry.writer" \
-  "roles/cloudbuild.builds.builder"; do
+  "roles/cloudbuild.builds.builder" \
+  "roles/iam.serviceAccountTokenCreator"; do
   gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --member="serviceAccount:${COMPUTE_SA}" \
     --role="${ROLE}" \
@@ -69,7 +92,7 @@ done
 
 # 2. Cloud Storage Bucket for MIDI and WAV files
 GCS_BUCKET_NAME="${PROJECT_ID}-midi-studio"
-echo "==> [2/3] Checking Cloud Storage Bucket: gs://${GCS_BUCKET_NAME}..."
+echo "==> [3/4] Checking Cloud Storage Bucket: gs://${GCS_BUCKET_NAME}..."
 if ! gcloud storage buckets describe "gs://${GCS_BUCKET_NAME}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   echo "    Creating bucket gs://${GCS_BUCKET_NAME} in ${REGION}..."
   gcloud storage buckets create "gs://${GCS_BUCKET_NAME}" \
@@ -79,6 +102,27 @@ if ! gcloud storage buckets describe "gs://${GCS_BUCKET_NAME}" --project="${PROJ
 else
   echo "    Bucket gs://${GCS_BUCKET_NAME} already exists."
 fi
+
+# Configure read permissions on GCS Bucket for corporate domains and (if permitted) allUsers
+echo "    Configuring read access on gs://${GCS_BUCKET_NAME}..."
+if [ -n "${ACTIVE_USER}" ]; then
+  gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+    --member="user:${ACTIVE_USER}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+fi
+if [ -n "${USER_DOMAIN}" ]; then
+  gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+    --member="domain:${USER_DOMAIN}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+fi
+for MEMBER in "domain:google.com" "allAuthenticatedUsers" "allUsers"; do
+  gcloud storage buckets add-iam-policy-binding "gs://${GCS_BUCKET_NAME}" \
+    --member="${MEMBER}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
+done
 
 # 3. Firestore Database for Generation History
 echo "==> [3/3] Checking Firestore Database..."

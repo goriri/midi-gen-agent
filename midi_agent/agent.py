@@ -35,11 +35,13 @@ Instructions & Best Practices:
   - **Drums**: Respect "不要鼓点" / "no drums" constraints
   - **Output Format**: Default to calling `generate_music(prompt, output_format="all")` so the user gets both the composition structure and downloadable audio files.
 - CRITICAL DOWNLOAD URL RULE:
-  - NEVER invent, guess, or fabricate URLs (NEVER use `storage.googleapis.com`, `h8p-adk-music-output`, or any other external domain).
-  - You MUST ONLY use the EXACT `wav_download_url` and `midi_download_url` fields returned in the tool output dictionary.
+  - NEVER invent, guess, or fabricate URLs (NEVER invent `h8p-adk-music-output` or fake bucket names).
+  - You MUST ONLY use the EXACT `wav_download_url` and `midi_download_url` (and `gcs_authenticated_wav_url` / `gcs_authenticated_midi_url` if provided) returned in the tool output dictionary.
   - Format the download links clearly in your response as:
     - 🎵 [Download WAV Audio](<exact wav_download_url from tool output>)
     - 🎼 [Download MIDI File](<exact midi_download_url from tool output>)
+  - If `gcs_authenticated_wav_url` is different from `wav_download_url`, also provide backup Enterprise Google-Account links:
+    - 🔐 [Enterprise WAV Link (Google Auth)](<exact gcs_authenticated_wav_url from tool output>) | [Enterprise MIDI Link (Google Auth)](<exact gcs_authenticated_midi_url from tool output>)
 - Provide a clear summary of the generated music (Title, BPM, Key, Instruments, Estimated Duration, and Clickable Download Links) in your final response.
 """
 
