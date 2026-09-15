@@ -113,7 +113,7 @@ if [ -n "${GE_APP_ID}" ]; then
   echo "==> [4/4] Registering agent to Gemini Enterprise app: ${GE_APP_ID}..."
   
   python3 -c "
-import os, sys, json, subprocess, requests
+import sys, os, json, subprocess, time, urllib.request, urllib.error
 
 project_id = '${PROJECT_ID}'
 project_number = '${PROJECT_NUMBER}'
@@ -128,30 +128,42 @@ else:
 
 card_url = f'{service_url}/a2a/app/.well-known/agent-card.json'
 print(f'    Fetching agent card from {card_url}...')
-try:
-    card_resp = requests.get(card_url, timeout=30)
-    card_data = card_resp.json()
-except Exception as e:
-    print(f'    Warning: Could not fetch card via HTTP ({e}), building card locally...')
-    import asyncio
-    from google.adk.a2a.utils.agent_card_builder import AgentCardBuilder
-    from a2a.types import AgentCapabilities
-    from midi_agent.agent import root_agent
-    card = asyncio.run(AgentCardBuilder(
-        agent=root_agent,
-        capabilities=AgentCapabilities(streaming=True),
-        rpc_url=f'{service_url}/a2a/app',
-        agent_version='0.1.0'
-    ).build())
-    card_data = card.model_dump(exclude_none=True)
 
-# Remove any None values from card_data
-def clean_dict(d):
-    if not isinstance(d, dict):
-        return d
-    return {k: clean_dict(v) for k, v in d.items() if v is not None}
+card_data = None
+for attempt in range(1, 11):
+    try:
+        req = urllib.request.Request(card_url, headers={'User-Agent': 'deploy-script/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status == 200:
+                card_data = json.loads(resp.read().decode('utf-8'))
+                print('    ✓ Successfully fetched live agent card from service!')
+                break
+    except Exception as e:
+        if attempt < 10:
+            print(f'    Waiting for Cloud Run service warm-up (attempt {attempt}/10)...')
+            time.sleep(3)
 
-card_data = clean_dict(card_data)
+if not card_data:
+    print('    Warning: Using embedded fallback agent card definition...')
+    card_data = {
+        'capabilities': {'streaming': True},
+        'defaultInputModes': ['text/plain'],
+        'defaultOutputModes': ['text/plain'],
+        'description': 'Generates MIDI music in composition format (text/JSON) or binary files (.mid / .wav) from text prompts.',
+        'name': 'midi_agent',
+        'preferredTransport': 'JSONRPC',
+        'protocolVersion': '0.3.0',
+        'skills': [
+            {'id': 'midi_agent', 'name': 'model', 'description': 'Generates MIDI music in composition format (text/JSON) or binary files (.mid / .wav) from text prompts.', 'tags': ['llm']},
+            {'id': 'midi_agent-generate_music', 'name': 'generate_music', 'description': 'Generate MIDI music in the specified output format given a user prompt.', 'tags': ['llm', 'tools']},
+            {'id': 'midi_agent-generate_composition_text', 'name': 'generate_composition_text', 'description': 'Generates music composition in text/JSON format based on the user text prompt.', 'tags': ['llm', 'tools']},
+            {'id': 'midi_agent-generate_midi_binary', 'name': 'generate_midi_binary', 'description': 'Generates music and saves it as a binary MIDI (.mid) file based on the user text prompt.', 'tags': ['llm', 'tools']},
+            {'id': 'midi_agent-generate_wav_binary', 'name': 'generate_wav_binary', 'description': 'Generates music and converts it to a binary WAV (.wav) audio file based on the user text prompt.', 'tags': ['llm', 'tools']}
+        ],
+        'supportsAuthenticatedExtendedCard': False,
+        'url': f'{service_url}/a2a/app',
+        'version': '0.1.0'
+    }
 
 token = subprocess.check_output(['gcloud', 'auth', 'print-access-token']).decode().strip()
 api_url = f'https://discoveryengine.googleapis.com/v1alpha/{engine_name}/assistants/default_assistant/agents'
@@ -160,6 +172,21 @@ headers = {
     'X-Goog-User-Project': project_id,
     'Content-Type': 'application/json'
 }
+
+def api_call(url, method='GET', payload=None):
+    data = json.dumps(payload).encode('utf-8') if payload is not None else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8')
+        try:
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, {'error': body}
+    except Exception as e:
+        return 500, {'error': str(e)}
 
 payload = {
     'displayName': 'ADK MIDI Composition Studio',
@@ -172,11 +199,10 @@ payload = {
     }
 }
 
-# Check if agent already exists
-resp_list = requests.get(api_url, headers=headers, timeout=30)
+status, resp_list = api_call(api_url, method='GET')
 existing_agent_name = None
-if resp_list.status_code == 200:
-    for a in resp_list.json().get('agents', []):
+if status == 200:
+    for a in resp_list.get('agents', []):
         if a.get('displayName') == 'ADK MIDI Composition Studio':
             existing_agent_name = a.get('name')
             break
@@ -184,15 +210,15 @@ if resp_list.status_code == 200:
 if existing_agent_name:
     print(f'    Updating existing Gemini Enterprise agent registration: {existing_agent_name}...')
     patch_url = f'https://discoveryengine.googleapis.com/v1alpha/{existing_agent_name}'
-    r = requests.patch(patch_url, headers=headers, json=payload, timeout=30)
+    code, r = api_call(patch_url, method='PATCH', payload=payload)
 else:
     print('    Creating new Gemini Enterprise agent registration...')
-    r = requests.post(api_url, headers=headers, json=payload, timeout=30)
+    code, r = api_call(api_url, method='POST', payload=payload)
 
-if r.status_code in (200, 201):
-    print(f'    ✓ Registered to Gemini Enterprise successfully! Agent ID: {r.json().get(\"name\")}')
+if code in (200, 201):
+    print(f'    ✓ Registered to Gemini Enterprise successfully! Agent ID: {r.get(\"name\")}')
 else:
-    print(f'    Registration response ({r.status_code}): {r.text}')
+    print(f'    Registration response ({code}): {r}')
 "
 else
   echo "==> [4/4] Step skipped: No --ge <APP_ID> specified."
