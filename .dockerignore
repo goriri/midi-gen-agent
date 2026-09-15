@@ -1,4 +1,6 @@
 venv/
+.venv/
+uv.lock
 __pycache__/
 *.pyc
 .git/
@@ -8,3 +10,4 @@ storage/
 output/
 *.wav
 *.mid
+*.mp4
