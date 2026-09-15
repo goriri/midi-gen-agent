@@ -209,9 +209,13 @@ if status == 404 and not ge_app_id.startswith('projects/'):
     eng_url = f'https://discoveryengine.googleapis.com/v1alpha/projects/{project_id}/locations/global/collections/default_collection/engines?engineId={ge_app_id}'
     eng_payload = {
         'displayName': f'MIDI Studio GE ({ge_app_id})',
-        'solutionType': 'SOLUTION_TYPE_GENERATIVE_CHAT',
+        'solutionType': 'SOLUTION_TYPE_SEARCH',
         'industryVertical': 'GENERIC',
-        'appType': 'APP_TYPE_INTRANET'
+        'appType': 'APP_TYPE_INTRANET',
+        'searchEngineConfig': {
+            'searchTier': 'SEARCH_TIER_ENTERPRISE',
+            'searchAddOns': ['SEARCH_ADD_ON_LLM']
+        }
     }
     ec, er = api_call(eng_url, method='POST', payload=eng_payload)
     if ec in (200, 201):
