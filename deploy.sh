@@ -204,6 +204,21 @@ payload = {
 }
 
 status, resp_list = api_call(api_url, method='GET')
+if status == 404 and not ge_app_id.startswith('projects/'):
+    print(f'    Engine {ge_app_id} not found; auto-creating Gemini Enterprise Engine...')
+    eng_url = f'https://discoveryengine.googleapis.com/v1alpha/projects/{project_id}/locations/global/collections/default_collection/engines?engineId={ge_app_id}'
+    eng_payload = {
+        'displayName': f'MIDI Studio GE ({ge_app_id})',
+        'solutionType': 'SOLUTION_TYPE_GENERATIVE_CHAT',
+        'industryVertical': 'GENERIC',
+        'appType': 'APP_TYPE_INTRANET'
+    }
+    ec, er = api_call(eng_url, method='POST', payload=eng_payload)
+    if ec in (200, 201):
+        print(f'    ✓ Created Gemini Enterprise Engine: {ge_app_id}')
+        time.sleep(3)
+        status, resp_list = api_call(api_url, method='GET')
+
 existing_agent_name = None
 if status == 200:
     for a in resp_list.get('agents', []):
@@ -217,6 +232,38 @@ if existing_agent_name:
     code, r = api_call(patch_url, method='PATCH', payload=payload)
 else:
     print('    Creating new Gemini Enterprise agent registration...')
+    code, r = api_call(api_url, method='POST', payload=payload)
+
+if code == 400 and 'license' in str(r).lower():
+    print('    Active Gemini Enterprise license not yet assigned; auto-provisioning free_trial_gemini license...')
+    account = subprocess.check_output(['gcloud', 'config', 'get-value', 'account']).decode().strip()
+    lc_url = f'https://discoveryengine.googleapis.com/v1alpha/projects/{project_id}/locations/global/licenseConfigs?licenseConfigId=free_trial_gemini'
+    import datetime
+    now = datetime.datetime.utcnow()
+    lc_payload = {
+        'licenseCount': 50,
+        'subscriptionTier': 'SUBSCRIPTION_TIER_SEARCH_AND_ASSISTANT',
+        'subscriptionTerm': 'SUBSCRIPTION_TERM_ONE_MONTH',
+        'freeTrial': True,
+        'geminiBundle': True,
+        'startDate': {'year': now.year, 'month': now.month, 'day': now.day}
+    }
+    api_call(lc_url, method='POST', payload=lc_payload)
+    ul_url = f'https://discoveryengine.googleapis.com/v1alpha/projects/{project_id}/locations/global/userStores/default_user_store:batchUpdateUserLicenses'
+    ul_payload = {
+        'inlineSource': {
+            'userLicenses': [
+                {
+                    'userPrincipal': account,
+                    'licenseAssignmentState': 'ASSIGNED',
+                    'licenseConfig': f'projects/{project_number}/locations/global/licenseConfigs/free_trial_gemini'
+                }
+            ]
+        }
+    }
+    api_call(ul_url, method='POST', payload=ul_payload)
+    time.sleep(2)
+    print('    Retrying Gemini Enterprise agent registration...')
     code, r = api_call(api_url, method='POST', payload=payload)
 
 if code in (200, 201):
