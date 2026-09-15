@@ -198,6 +198,9 @@ payload = {
     'icon': {
         'uri': 'https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/music_note/default/24px.svg'
     },
+    'sharingConfig': {
+        'scope': 'ALL_USERS'
+    },
     'a2aAgentDefinition': {
         'jsonAgentCard': json.dumps(card_data)
     }
